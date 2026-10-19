@@ -34,19 +34,22 @@ object NcrRepository {
             carNo = it[NcrDataTable.carNo],
             methodUsed = it[NcrDataTable.methodUsed],
             rootCause = it[NcrDataTable.rootCause],
-            correctiveActionAgreed = it[NcrDataTable.correctiveActionAgreed]
+            correctiveActionAgreed = it[NcrDataTable.correctiveActionAgreed],
+            isArchived = it[NcrDataTable.isArchived]
         )
     }
 
     fun searchNcr(query: String): List<NcrModel> = transaction {
         if (query.isBlank()) {
-            NcrDataTable.selectAll().orderBy(NcrDataTable.date to SortOrder.DESC, NcrDataTable.ncr to SortOrder.DESC).limit(100).map { rowToModel(it) }
+            NcrDataTable.selectAll().where { NcrDataTable.isArchived eq false }
+                .orderBy(NcrDataTable.date to SortOrder.DESC, NcrDataTable.ncr to SortOrder.DESC).limit(100).map { rowToModel(it) }
         } else {
             val lowerQuery = "%${query.lowercase()}%"
             NcrDataTable.selectAll()
-                .where { 
-                    (NcrDataTable.ncr.lowerCase() like lowerQuery) or 
-                    (NcrDataTable.jobNo.lowerCase() like lowerQuery) 
+                .where {
+                    ((NcrDataTable.ncr.lowerCase() like lowerQuery) or
+                            (NcrDataTable.jobNo.lowerCase() like lowerQuery)) and
+                            (NcrDataTable.isArchived eq false)
                 }
                 .orderBy(NcrDataTable.date to SortOrder.DESC, NcrDataTable.ncr to SortOrder.DESC)
                 .limit(100)
@@ -90,6 +93,7 @@ object NcrRepository {
                 it[methodUsed] = model.methodUsed
                 it[rootCause] = model.rootCause
                 it[correctiveActionAgreed] = model.correctiveActionAgreed
+                it[isArchived] = model.isArchived
             }
             insertedId.value
         } else {
@@ -123,54 +127,55 @@ object NcrRepository {
                 it[methodUsed] = model.methodUsed
                 it[rootCause] = model.rootCause
                 it[correctiveActionAgreed] = model.correctiveActionAgreed
+                it[isArchived] = model.isArchived
             }
             model.id
         }
     }
 
     fun searchNcrFiltered(filter: NcrFilter): List<NcrModel> = transaction {
-        val query = NcrDataTable.selectAll()
+        var query = NcrDataTable.select { NcrDataTable.isArchived eq filter.isArchived }
 
         // Text search
         if (filter.searchQuery.isNotBlank()) {
             val lowerQuery = "%${filter.searchQuery.lowercase()}%"
-            query.andWhere {
+            query = query.andWhere {
                 (NcrDataTable.ncr.lowerCase() like lowerQuery) or
-                (NcrDataTable.jobNo.lowerCase() like lowerQuery)
+                        (NcrDataTable.jobNo.lowerCase() like lowerQuery)
             }
         }
 
         // Project filter
         if (!filter.projectNo.isNullOrBlank()) {
-            query.andWhere {
+            query = query.andWhere {
                 NcrDataTable.jobNo eq filter.projectNo
             }
         }
 
         // Date range
         if (filter.dateFrom != null) {
-            query.andWhere {
+            query = query.andWhere {
                 NcrDataTable.date greaterEq filter.dateFrom
             }
         }
         if (filter.dateTo != null) {
-            query.andWhere {
+            query = query.andWhere {
                 NcrDataTable.date lessEq filter.dateTo
             }
         }
 
         // Status filter
         when (filter.status) {
-            NcrStatus.OPEN -> query.andWhere {
+            NcrStatus.OPEN -> query = query.andWhere {
                 NcrDataTable.actualCloseDate.isNull()
             }
-            NcrStatus.CLOSED -> query.andWhere {
+            NcrStatus.CLOSED -> query = query.andWhere {
                 NcrDataTable.actualCloseDate.isNotNull()
             }
-            NcrStatus.OVERDUE -> query.andWhere {
+            NcrStatus.OVERDUE -> query = query.andWhere {
                 NcrDataTable.actualCloseDate.isNull() and (NcrDataTable.targetCompletionDate less LocalDate.now())
             }
-            NcrStatus.UPCOMING -> query.andWhere {
+            NcrStatus.UPCOMING -> query = query.andWhere {
                 NcrDataTable.actualCloseDate.isNull() and (NcrDataTable.targetCompletionDate greaterEq LocalDate.now())
             }
             NcrStatus.ALL -> { /* no filter */ }
@@ -178,7 +183,7 @@ object NcrRepository {
 
         // Department filter
         if (filter.deptId != null) {
-            query.andWhere {
+            query = query.andWhere {
                 NcrDataTable.responsibleDept eq filter.deptId
             }
         }
@@ -230,8 +235,15 @@ object NcrRepository {
                 }
             }
         }
-        
+
         val counterStr = counter.toString().padStart(3, '0')
         "$jobNo/$yearStr/$counterStr"
+    }
+
+    fun archiveNcr(id: Int, archive: Boolean): Boolean = transaction {
+        val count = NcrDataTable.update({ NcrDataTable.id eq id }) {
+            it[isArchived] = archive
+        }
+        count > 0
     }
 }

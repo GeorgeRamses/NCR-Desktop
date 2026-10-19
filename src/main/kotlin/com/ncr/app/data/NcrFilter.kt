@@ -16,5 +16,6 @@ data class NcrFilter(
     val dateFrom: LocalDate? = null,
     val dateTo: LocalDate? = null,
     val status: NcrStatus = NcrStatus.ALL,
-    val deptId: Int? = null
+    val deptId: Int? = null,
+    val isArchived: Boolean = false
 )

@@ -10,8 +10,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.ncr.app.email.NotificationScheduler
 import com.ncr.app.data.*
 import com.ncr.app.email.EmailService
+import com.ncr.app.email.GraphMailer
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -139,6 +143,13 @@ fun SettingsScreen(onBack: () -> Unit) {
                                 val updated = rule.copy(enabled = !rule.enabled)
                                 NotificationRepository.saveRule(updated)
                                 rules = NotificationRepository.getAllRules()
+                            },
+                            onSendNow = {
+                                scope.launch {
+                                    testResult = "Sending..."
+                                    testResult = NotificationScheduler.runRuleNow(rule)
+                                    rules = NotificationRepository.getAllRules()
+                                }
                             }
                         )
                     }
@@ -184,7 +195,8 @@ fun RuleCard(
     recipientCount: Int,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
-    onToggleEnabled: () -> Unit
+    onToggleEnabled: () -> Unit,
+    onSendNow: () -> Unit
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
 
@@ -245,9 +257,21 @@ fun RuleCard(
 
             Spacer(Modifier.height(8.dp))
 
+            if (rule.triggerOnOverdue || rule.triggerOnOpen) {
+                Text(
+                    "Last sent: " + (rule.lastRunAt?.toString()?.replace('T', ' ')?.take(16) ?: "never"),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(8.dp))
+            }
+
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilledTonalIconButton(onClick = onEdit) {
                     Icon(Icons.Default.Edit, contentDescription = "Edit")
+                }
+                FilledTonalIconButton(onClick = onSendNow) {
+                    Icon(Icons.Default.Send, contentDescription = "Send now")
                 }
                 FilledTonalIconButton(onClick = { showDeleteDialog = true }) {
                     Icon(Icons.Default.Delete, contentDescription = "Delete")
@@ -297,21 +321,52 @@ fun RuleDialog(
     var triggerOnClose by remember { mutableStateOf(rule?.triggerOnClose ?: false) }
     var triggerOnOverdue by remember { mutableStateOf(rule?.triggerOnOverdue ?: false) }
     var triggerOnOpen by remember { mutableStateOf(rule?.triggerOnOpen ?: false) }
-    var checkIntervalMinutes by remember { mutableStateOf(rule?.checkIntervalMinutes ?: 1440) }
-
-    var recipients: MutableList<String> by remember {
+    var checkIntervalMinutes by remember {
+        mutableStateOf((rule?.checkIntervalMinutes ?: 1440).takeIf { it in listOf(1440, 10080, 20160, 43200) } ?: 1440)
+    }
+    var sendHour by remember { mutableStateOf(rule?.sendHour ?: 8) }
+    var dayOfWeek by remember { mutableStateOf(rule?.dayOfWeek ?: 0) }
+    // 0 = SMTP, 1 = classic Outlook on this PC, 2 = Microsoft account (Graph)
+    var sendMethod by remember {
         mutableStateOf(
-            if (rule?.id != null) {
-                NotificationRepository.getRecipients(rule.id).map { it.emailAddress }.toMutableList()
-            } else {
-                mutableListOf()
+            when {
+                rule?.useGraph == true -> 2
+                rule?.useOutlook == true -> 1
+                else -> 1
             }
         )
+    }
+    var graphTenant by remember { mutableStateOf("") }
+    var graphClient by remember { mutableStateOf("") }
+    var graphEmail by remember { mutableStateOf<String?>(null) }
+    var graphSignedIn by remember { mutableStateOf(false) }
+    var graphBusy by remember { mutableStateOf(false) }
+    val dialogScope = rememberCoroutineScope()
+
+    LaunchedEffect(Unit) {
+        val acc = GraphRepository.get()
+        if (acc != null) {
+            graphTenant = acc.tenantId
+            graphClient = acc.clientId
+            graphEmail = acc.accountEmail
+            graphSignedIn = !acc.refreshToken.isNullOrBlank()
+        }
+    }
+
+    // mutableStateListOf so Add / remove actually redraw (a plain MutableList inside mutableStateOf does not)
+    val recipients = remember {
+        mutableStateListOf<String>().apply {
+            if (rule?.id != null) {
+                addAll(NotificationRepository.getRecipients(rule.id).map { it.emailAddress })
+            }
+        }
     }
     var newRecipient by remember { mutableStateOf("") }
 
     AlertDialog(
         onDismissRequest = onDismiss,
+        modifier = Modifier.width(640.dp),
+        properties = DialogProperties(usePlatformDefaultWidth = false),
         title = { Text(if (rule == null) "New Rule" else "Edit Rule") },
         text = {
             LazyColumn(
@@ -365,37 +420,164 @@ fun RuleDialog(
                     }
                 }
                 item {
-                    Text("SMTP Settings", style = MaterialTheme.typography.labelLarge)
-                    OutlinedTextField(
-                        value = smtpHost,
-                        onValueChange = { smtpHost = it },
-                        label = { Text("SMTP Host") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = smtpPort,
-                        onValueChange = { smtpPort = it },
-                        label = { Text("Port") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = smtpUser,
-                        onValueChange = { smtpUser = it },
-                        label = { Text("Username") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    OutlinedTextField(
-                        value = smtpPassword,
-                        onValueChange = { smtpPassword = it },
-                        label = { Text("Password") },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Checkbox(checked = useSsl, onCheckedChange = { useSsl = it })
-                        Text("Use SSL")
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        DropdownField(
+                            label = "Send method",
+                            options = listOf(
+                                0 to "SMTP (host + password)",
+                                1 to "Classic Outlook on this PC",
+                                2 to "Microsoft account (Graph)"
+                            ),
+                            selected = sendMethod,
+                            onSelect = { sendMethod = it },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Text(
+                            when (sendMethod) {
+                                1 -> "Uses classic Outlook already signed in on this PC."
+                                2 -> "Uses the Microsoft account configured below."
+                                else -> "Fill in the SMTP settings below."
+                            },
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+                item {
+                    if (sendMethod == 0) {
+                        Text("SMTP Settings", style = MaterialTheme.typography.labelLarge)
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(
+                                containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(12.dp)) {
+                                Text(
+                                    "Office 365 / Outlook Settings",
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Text(
+                                    "Host: smtp-mail.outlook.com | Port: 587 | SSL: OFF",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Text(
+                                    "Use your App Password from the Authenticator app.",
+                                    style = MaterialTheme.typography.bodySmall
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                Button(
+                                    onClick = {
+                                        smtpHost = "smtp-mail.outlook.com"
+                                        smtpPort = "587"
+                                        useSsl = false
+                                    },
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Text("Apply Office 365 Defaults")
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                        OutlinedTextField(
+                            value = smtpHost,
+                            onValueChange = { smtpHost = it },
+                            label = { Text("SMTP Host") },
+                            placeholder = { Text("smtp-mail.outlook.com") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = smtpPort,
+                            onValueChange = { smtpPort = it },
+                            label = { Text("Port") },
+                            placeholder = { Text("587") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = smtpUser,
+                            onValueChange = { smtpUser = it },
+                            label = { Text("Email Address") },
+                            placeholder = { Text("user@company.com") },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        OutlinedTextField(
+                            value = smtpPassword,
+                            onValueChange = { smtpPassword = it },
+                            label = { Text("App Password") },
+                            placeholder = { Text("Your App Password from Authenticator") },
+                            modifier = Modifier.fillMaxWidth(),
+                            visualTransformation = PasswordVisualTransformation()
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Checkbox(checked = useSsl, onCheckedChange = { useSsl = it })
+                            Text("Use SSL (port 465)")
+                            Spacer(Modifier.width(4.dp))
+                            Text(
+                                "(Leave OFF for port 587)",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+                item {
+                    if (sendMethod == 2) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Microsoft Graph Settings", style = MaterialTheme.typography.labelLarge)
+                            Text(
+                                "Configure your Microsoft 365 account to send emails via Graph API.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Text(
+                                if (graphSignedIn) "Signed in${graphEmail?.let { " as $it" } ?: ""}" else "Not signed in",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                                OutlinedTextField(
+                                    value = graphTenant,
+                                    onValueChange = { graphTenant = it },
+                                    label = { Text("Directory (tenant) ID") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                OutlinedTextField(
+                                    value = graphClient,
+                                    onValueChange = { graphClient = it },
+                                    label = { Text("Application (client) ID") },
+                                    singleLine = true,
+                                    modifier = Modifier.weight(1f)
+                                )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Button(
+                                    enabled = !graphBusy,
+                                    onClick = {
+                                        dialogScope.launch {
+                                            graphBusy = true
+                                            val result = GraphMailer.signIn(graphTenant.trim(), graphClient.trim())
+                                            graphBusy = false
+                                            val acc = GraphRepository.get()
+                                            graphSignedIn = result.success && !acc?.refreshToken.isNullOrBlank()
+                                            graphEmail = acc?.accountEmail
+                                        }
+                                    }
+                                ) { Text(if (graphSignedIn) "Sign in again" else "Sign in") }
+                                if (graphSignedIn) {
+                                    OutlinedButton(onClick = {
+                                        GraphMailer.signOut()
+                                        graphSignedIn = false
+                                        graphEmail = null
+                                    }) { Text("Sign out") }
+                                }
+                                if (graphBusy) CircularProgressIndicator(modifier = Modifier.size(24.dp))
+                            }
+                        }
                     }
                 }
                 item {
@@ -407,28 +589,56 @@ fun RuleDialog(
                     CheckboxRow("Open NCRs reminder", triggerOnOpen) { triggerOnOpen = it }
                 }
                 item {
-                    val hasReminder = triggerOnOverdue || triggerOnOpen
-                    if (hasReminder) {
-                        Text("Reminder Frequency", style = MaterialTheme.typography.labelLarge)
-                        val intervals = listOf(
-                            Pair(1440, "Daily"),
-                            Pair(10080, "Weekly"),
-                            Pair(20160, "Every 2 weeks"),
-                            Pair(43200, "Monthly")
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            intervals.forEach { (minutes, label) ->
-                                val isSelected = checkIntervalMinutes == minutes
-                                FilterChip(
-                                    selected = isSelected,
-                                    onClick = { checkIntervalMinutes = minutes },
-                                    label = { Text(label) },
+                    if (triggerOnOverdue || triggerOnOpen) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("Reminder Schedule", style = MaterialTheme.typography.labelLarge)
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                DropdownField(
+                                    label = "Repeat",
+                                    options = listOf(
+                                        1440 to "Daily",
+                                        10080 to "Weekly",
+                                        20160 to "Every 2 weeks",
+                                        43200 to "Monthly"
+                                    ),
+                                    selected = checkIntervalMinutes,
+                                    onSelect = { checkIntervalMinutes = it },
+                                    modifier = Modifier.weight(1f)
+                                )
+                                DropdownField(
+                                    label = "Send at",
+                                    options = (0..23).map { it to "%02d:00".format(it) },
+                                    selected = sendHour,
+                                    onSelect = { sendHour = it },
                                     modifier = Modifier.weight(1f)
                                 )
                             }
+                            if (checkIntervalMinutes == 10080) {
+                                Spacer(Modifier.height(4.dp))
+                                DropdownField(
+                                    label = "Day of week",
+                                    options = listOf(
+                                        0 to "Sunday",
+                                        1 to "Monday",
+                                        2 to "Tuesday",
+                                        3 to "Wednesday",
+                                        4 to "Thursday",
+                                        5 to "Friday",
+                                        6 to "Saturday"
+                                    ),
+                                    selected = dayOfWeek,
+                                    onSelect = { dayOfWeek = it },
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            Text(
+                                "Reminders are sent while the app is running. If it was closed at that time, they are sent at the next start.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
                         }
                     }
                 }
@@ -456,12 +666,27 @@ fun RuleDialog(
                         useSsl = useSsl,
                         enabled = enabled,
                         checkIntervalMinutes = checkIntervalMinutes,
+                        sendHour = sendHour,
+                        dayOfWeek = dayOfWeek,
+                        useOutlook = sendMethod == 1,
+                        useGraph = sendMethod == 2,
                         triggerOnCreate = triggerOnCreate,
                         triggerOnUpdate = triggerOnUpdate,
                         triggerOnClose = triggerOnClose,
                         triggerOnOverdue = triggerOnOverdue,
                         triggerOnOpen = triggerOnOpen
                     )
+                    // Save Graph account if using Graph send method
+                    if (sendMethod == 2) {
+                        GraphRepository.save(
+                            GraphAccount(
+                                tenantId = graphTenant.trim(),
+                                clientId = graphClient.trim(),
+                                refreshToken = GraphRepository.get()?.refreshToken,
+                                accountEmail = graphEmail
+                            )
+                        )
+                    }
                     // Save the rule first to get the ID
                     val ruleId = NotificationRepository.saveRule(tempRule)
                     // Save recipients using the returned ID
@@ -564,4 +789,39 @@ fun SmtpTestDialog(
             }
         }
     )
+}
+
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun <T> DropdownField(
+    label: String,
+    options: List<Pair<T, String>>,
+    selected: T,
+    onSelect: (T) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var expanded by remember { mutableStateOf(false) }
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier
+    ) {
+        OutlinedTextField(
+            value = options.firstOrNull { it.first == selected }?.second ?: "",
+            onValueChange = {},
+            readOnly = true,
+            label = { Text(label) },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier.menuAnchor().fillMaxWidth()
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (value, text) ->
+                DropdownMenuItem(
+                    text = { Text(text) },
+                    onClick = { onSelect(value); expanded = false }
+                )
+            }
+        }
+    }
 }

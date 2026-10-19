@@ -19,17 +19,18 @@ data class NcrModel(
     val suggestedBy: String? = null,
     val targetCompletionDate: LocalDate? = null,
     val actualCloseDate: LocalDate? = null,
-    
+
     val customerComplain: Boolean = false,
     val product: Boolean = false,
     val material: Boolean = false,
     val environmentalIssue: Boolean = false,
     val safetyIssue: Boolean = false,
     val qualityManagementIssue: Boolean = false,
-    
+
     val responsibleDept: Int? = null,
     val carNo: String? = null,
     val methodUsed: String? = null,
     val rootCause: String? = null,
-    val correctiveActionAgreed: String? = null
+    val correctiveActionAgreed: String? = null,
+    val isArchived: Boolean = false
 )

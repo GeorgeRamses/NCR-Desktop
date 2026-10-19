@@ -7,6 +7,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.time.LocalDate
+import java.time.format.DateTimeFormatter
 
 object ExcelExporter {
 
@@ -44,7 +45,7 @@ object ExcelExporter {
             val deptName = NcrRepository.getDeptMap()[ncr.responsibleDept] ?: ""
 
             val replacements = mapOf(
-                "\${dateissue}" to (ncr.date?.toString() ?: ""),
+                "\${dateissue}" to (ncr.date?.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: ""),
                 "\${ncr}" to (ncr.ncr ?: ""),
                 "\${c}" to if (ncr.customerComplain) "✔" else "",
                 "\${m}" to if (ncr.material) "✔" else "",
@@ -57,8 +58,8 @@ object ExcelExporter {
                 "\${by}" to (ncr.ncrRaisedBy ?: ""),
                 "\${disposition}" to (ncr.recommendedDisposition ?: ""),
                 "\${suggested}" to (ncr.suggestedBy ?: ""),
-                "\${disposdate}" to (ncr.dispositionDate?.toString() ?: ""),
-                "\${completiondate}" to (ncr.targetCompletionDate?.toString() ?: "")
+                "\${disposdate}" to (ncr.dispositionDate?.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: ""),
+                "\${completiondate}" to (ncr.targetCompletionDate?.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: "")
             )
 
             replaceInSheet(sheet, replacements)
@@ -77,7 +78,7 @@ object ExcelExporter {
             val sheet = wb.getSheetAt(0)
 
             val replacements = mapOf(
-                "\${date}" to (ncr.date?.toString() ?: ""),
+                "\${date}" to (ncr.date?.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: ""),
                 "\${ncr}" to (ncr.carNo ?: ""),
                 "\${description}" to (ncr.descriptionOfNonConformity ?: ""),
                 "\${Ref}" to (ncr.reference ?: ""),
@@ -105,14 +106,14 @@ object ExcelExporter {
             // 1. Replace header variables
             val pendingCount = ncrList.count { it.actualCloseDate == null }.toString()
             val totalCount = ncrList.size.toString()
-            
+
             val years = ncrList.mapNotNull { it.date?.year }.distinct().sorted()
             val yearStr = when {
                 years.isEmpty() -> LocalDate.now().year.toString()
                 years.size == 1 -> years.first().toString()
                 else -> "${years.first()}-${years.last()}"
             }
-            val date = LocalDate.now().toString()
+            val date = LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))
 
             val headerReplacements = mapOf(
                 "\${year}" to yearStr,
@@ -210,8 +211,8 @@ object ExcelExporter {
                             "\${description}" to (ncr.descriptionOfNonConformity ?: ""),
                             "\${ncr}" to (ncr.ncr ?: ""),
                             "\${respDept}" to deptName,
-                            "\${dateissue}" to (ncr.date?.toString() ?: ""),
-                            "\${target}" to (ncr.targetCompletionDate?.toString() ?: "")
+                            "\${dateissue}" to (ncr.date?.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: ""),
+                            "\${target}" to (ncr.targetCompletionDate?.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: "")
                         )
                     } else {
                         mapOf(
@@ -221,10 +222,10 @@ object ExcelExporter {
                             "\${raisedby}" to (ncr.ncrRaisedBy ?: ""),
                             "\${car}" to (ncr.carNo ?: ""),
                             "\${resbDept}" to deptName,
-                            "\${dateissue}" to (ncr.date?.toString() ?: ""),
+                            "\${dateissue}" to (ncr.date?.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: ""),
                             "\${disposition}" to (ncr.recommendedDisposition ?: ""),
-                            "\${target}" to (ncr.targetCompletionDate?.toString() ?: ""),
-                            "\${actual}" to (ncr.actualCloseDate?.toString() ?: "")
+                            "\${target}" to (ncr.targetCompletionDate?.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: ""),
+                            "\${actual}" to (ncr.actualCloseDate?.format(DateTimeFormatter.ofPattern("dd/MM/yyyy")) ?: "")
                         )
                     }
 

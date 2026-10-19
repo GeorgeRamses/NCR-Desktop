@@ -32,6 +32,7 @@ object NcrDataTable : IntIdTable("NCR_DATA") {
     val responsibleDept = reference("Responsible_Dept", DeptsTable).nullable()
     val carNo = varchar("carNo", 255).nullable()
     val methodUsed = varchar("MethodUsed", 50).nullable()
-    val rootCause = varchar("RootCause", 255).nullable()
+    val rootCause = text("RootCause").nullable()
     val correctiveActionAgreed = text("Corrective_Action_Agreed").nullable()
+    val isArchived = bool("is_archived").default(false)
 }

@@ -10,6 +10,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.WindowPlacement
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import com.ncr.app.data.BulkOperationState
 import com.ncr.app.data.DatabaseFactory
 import com.ncr.app.data.NcrRepository
 import com.ncr.app.data.NcrStatus
@@ -32,9 +33,23 @@ sealed class Screen {
     object Settings : Screen()
 }
 
+/**
+ * Version shown in the window title. Uses the generated BuildConfig when the Gradle build provides one,
+ * otherwise the title simply has no version (so the project compiles either way).
+ */
+private val appVersion: String? = runCatching {
+    val cls = Class.forName("com.ncr.app.BuildConfig")
+    val direct = runCatching { cls.getField("APP_VERSION").get(null) }.getOrNull()
+    (direct ?: cls.getMethod("getAPP_VERSION").invoke(cls.getField("INSTANCE").get(null))) as String
+}.getOrNull()
+
 fun main() = application {
-    DatabaseFactory.init()
-    NotificationScheduler.start()
+    // remember{} = run ONCE. Code placed directly in application{} re-runs on every recomposition
+    // (e.g. each keystroke in the search box), which started duplicate schedulers.
+    remember {
+        DatabaseFactory.init()
+        NotificationScheduler.start()
+    }
 
     // Ensure templates exist (Excel templates should already exist)
     val baseDir = System.getProperty("jpackage.app-path")?.let { File(it).parentFile } ?: File(System.getProperty("user.dir"))
@@ -53,9 +68,12 @@ fun main() = application {
     var selectedStatus by remember { mutableStateOf(NcrStatus.ALL) }
     var selectedDept by remember { mutableStateOf<Int?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var showArchived by remember { mutableStateOf(false) }
 
     var ncrList by remember { mutableStateOf(listOf<NcrModel>()) }
     val dashboardListState = rememberLazyListState()
+    var bulkOperationState by remember { mutableStateOf<BulkOperationState>(BulkOperationState.Idle) }
+    val bulkScope = rememberCoroutineScope()
 
     val currentFilter = NcrFilter(
         searchQuery = searchQuery,
@@ -63,7 +81,8 @@ fun main() = application {
         dateFrom = try { if (dateFromText.isNotBlank()) LocalDate.parse(dateFromText) else null } catch (e: Exception) { null },
         dateTo = try { if (dateToText.isNotBlank()) LocalDate.parse(dateToText) else null } catch (e: Exception) { null },
         status = selectedStatus,
-        deptId = selectedDept
+        deptId = selectedDept,
+        isArchived = showArchived
     )
 
     LaunchedEffect(currentFilter, currentScreen) {
@@ -73,8 +92,11 @@ fun main() = application {
     }
 
     Window(
-        onCloseRequest = ::exitApplication,
-        title = "NCR Management System",
+        onCloseRequest = {
+            NotificationScheduler.stop()
+            exitApplication()
+        },
+        title = "NCR Management System" + (appVersion?.let { " - v$it" } ?: ""),
         icon = painterResource("icon.png"),
         state = rememberWindowState(placement = WindowPlacement.Maximized)
     ) {
@@ -232,8 +254,120 @@ fun main() = application {
                             errorMessage = e.message ?: "An unknown error occurred"
                         }
                     },
+                    onArchiveNcrClick = { id, archive ->
+                        try {
+                            NcrRepository.archiveNcr(id, archive)
+                            ncrList = NcrRepository.searchNcrFiltered(currentFilter) // refresh list
+                        } catch (e: Exception) {
+                            errorMessage = e.message ?: "An unknown error occurred while archiving"
+                        }
+                    },
+                    showArchived = showArchived,
+                    onShowArchivedChange = { showArchived = it },
                     ncrList = ncrList,
-                    listState = dashboardListState
+                    listState = dashboardListState,
+                    bulkOperationState = bulkOperationState,
+                    onBulkNcrPdf = { list ->
+                        BulkActionExecutor.executeBulk(
+                            scope = bulkScope,
+                            ncrList = list,
+                            operationName = "Generating NCR PDFs",
+                            outputDir = printsDir,
+                            state = mutableStateOf(bulkOperationState).also {
+                                // We need to use the actual state reference
+                            }.let {
+                                // Create a proper MutableState wrapper
+                                object : MutableState<BulkOperationState> {
+                                    override var value: BulkOperationState
+                                        get() = bulkOperationState
+                                        set(v) { bulkOperationState = v }
+                                    override fun component1() = value
+                                    override fun component2(): (BulkOperationState) -> Unit = { value = it }
+                                }
+                            },
+                            fileNameProvider = { ncr ->
+                                val safeNo = ncr.ncr?.replace("/", "_") ?: "Unknown"
+                                "NCR_$safeNo.pdf"
+                            },
+                            action = { ncr, destFile ->
+                                PdfExporter.exportNcrForm(ncr, destFile.absolutePath)
+                            }
+                        )
+                    },
+                    onBulkCarPdf = { list ->
+                        BulkActionExecutor.executeBulk(
+                            scope = bulkScope,
+                            ncrList = list,
+                            operationName = "Generating CAR PDFs",
+                            outputDir = printsDir,
+                            state = object : MutableState<BulkOperationState> {
+                                override var value: BulkOperationState
+                                    get() = bulkOperationState
+                                    set(v) { bulkOperationState = v }
+                                override fun component1() = value
+                                override fun component2(): (BulkOperationState) -> Unit = { value = it }
+                            },
+                            fileNameProvider = { ncr ->
+                                val safeNo = ncr.ncr?.replace("/", "_") ?: "Unknown"
+                                "CAR_$safeNo.pdf"
+                            },
+                            action = { ncr, destFile ->
+                                PdfExporter.exportCarForm(ncr, destFile.absolutePath)
+                            }
+                        )
+                    },
+                    onBulkNcrExcel = { list ->
+                        BulkActionExecutor.executeBulk(
+                            scope = bulkScope,
+                            ncrList = list,
+                            operationName = "Generating NCR Excel Forms",
+                            outputDir = printsDir,
+                            state = object : MutableState<BulkOperationState> {
+                                override var value: BulkOperationState
+                                    get() = bulkOperationState
+                                    set(v) { bulkOperationState = v }
+                                override fun component1() = value
+                                override fun component2(): (BulkOperationState) -> Unit = { value = it }
+                            },
+                            fileNameProvider = { ncr ->
+                                val safeNo = ncr.ncr?.replace("/", "_") ?: "Unknown"
+                                "NCR_$safeNo.xlsx"
+                            },
+                            action = { ncr, destFile ->
+                                ExcelExporter.exportNcrForm(ncr, destFile)
+                            }
+                        )
+                    },
+                    onBulkCarExcel = { list ->
+                        BulkActionExecutor.executeBulk(
+                            scope = bulkScope,
+                            ncrList = list,
+                            operationName = "Generating CAR Excel Forms",
+                            outputDir = printsDir,
+                            state = object : MutableState<BulkOperationState> {
+                                override var value: BulkOperationState
+                                    get() = bulkOperationState
+                                    set(v) { bulkOperationState = v }
+                                override fun component1() = value
+                                override fun component2(): (BulkOperationState) -> Unit = { value = it }
+                            },
+                            fileNameProvider = { ncr ->
+                                val safeNo = ncr.ncr?.replace("/", "_") ?: "Unknown"
+                                "CAR_$safeNo.xlsx"
+                            },
+                            action = { ncr, destFile ->
+                                ExcelExporter.exportCarForm(ncr, destFile)
+                            }
+                        )
+                    },
+                    onBulkDismiss = { bulkOperationState = BulkOperationState.Idle },
+                    onBulkOpenFolder = {
+                        try {
+                            if (Desktop.isDesktopSupported() && printsDir.exists()) {
+                                Desktop.getDesktop().open(printsDir)
+                            }
+                        } catch (_: Exception) { }
+                    }
                 )
                 is Screen.NcrDataEntry -> NcrDataEntryScreen(
                     ncrId = screen.ncrId,
