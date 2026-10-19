@@ -145,10 +145,10 @@ object NcrRepository {
             }
         }
 
-        // Project filter
-        if (!filter.projectNo.isNullOrBlank()) {
+        // Project filter (multi-select)
+        if (filter.projectNos.isNotEmpty()) {
             query = query.andWhere {
-                NcrDataTable.jobNo eq filter.projectNo
+                NcrDataTable.jobNo inList filter.projectNos
             }
         }
 
@@ -164,27 +164,30 @@ object NcrRepository {
             }
         }
 
-        // Status filter
-        when (filter.status) {
-            NcrStatus.OPEN -> query = query.andWhere {
-                NcrDataTable.actualCloseDate.isNull()
+        // Status filter (multi-select: a row matches if it satisfies ANY selected status)
+        val statuses = filter.statuses.filter { it != NcrStatus.ALL }
+        if (statuses.isNotEmpty()) {
+            val today = LocalDate.now()
+            query = query.andWhere {
+                statuses.map { status ->
+                    when (status) {
+                        NcrStatus.OPEN -> NcrDataTable.actualCloseDate.isNull()
+                        NcrStatus.CLOSED -> NcrDataTable.actualCloseDate.isNotNull()
+                        NcrStatus.OVERDUE ->
+                            NcrDataTable.actualCloseDate.isNull() and (NcrDataTable.targetCompletionDate less today)
+                        NcrStatus.UPCOMING ->
+                            NcrDataTable.actualCloseDate.isNull() and (NcrDataTable.targetCompletionDate greaterEq today)
+                        NcrStatus.ALL -> Op.TRUE
+                    }
+                }.reduce { acc, op -> acc or op }
             }
-            NcrStatus.CLOSED -> query = query.andWhere {
-                NcrDataTable.actualCloseDate.isNotNull()
-            }
-            NcrStatus.OVERDUE -> query = query.andWhere {
-                NcrDataTable.actualCloseDate.isNull() and (NcrDataTable.targetCompletionDate less LocalDate.now())
-            }
-            NcrStatus.UPCOMING -> query = query.andWhere {
-                NcrDataTable.actualCloseDate.isNull() and (NcrDataTable.targetCompletionDate greaterEq LocalDate.now())
-            }
-            NcrStatus.ALL -> { /* no filter */ }
         }
 
-        // Department filter
-        if (filter.deptId != null) {
+        // Department filter (multi-select)
+        if (filter.deptIds.isNotEmpty()) {
+            val ids = filter.deptIds.map { org.jetbrains.exposed.dao.id.EntityID(it, DeptsTable) }
             query = query.andWhere {
-                NcrDataTable.responsibleDept eq filter.deptId
+                NcrDataTable.responsibleDept inList ids
             }
         }
 

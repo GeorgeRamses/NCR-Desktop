@@ -12,10 +12,10 @@ enum class NcrStatus {
 
 data class NcrFilter(
     val searchQuery: String = "",
-    val projectNo: String? = null,
+    val projectNos: Set<String> = emptySet(),   // empty = all projects
     val dateFrom: LocalDate? = null,
     val dateTo: LocalDate? = null,
-    val status: NcrStatus = NcrStatus.ALL,
-    val deptId: Int? = null,
+    val statuses: Set<NcrStatus> = emptySet(),  // empty = all statuses (matches ANY selected)
+    val deptIds: Set<Int> = emptySet(),         // empty = all departments
     val isArchived: Boolean = false
 )

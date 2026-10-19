@@ -33,15 +33,7 @@ sealed class Screen {
     object Settings : Screen()
 }
 
-/**
- * Version shown in the window title. Uses the generated BuildConfig when the Gradle build provides one,
- * otherwise the title simply has no version (so the project compiles either way).
- */
-private val appVersion: String? = runCatching {
-    val cls = Class.forName("com.ncr.app.BuildConfig")
-    val direct = runCatching { cls.getField("APP_VERSION").get(null) }.getOrNull()
-    (direct ?: cls.getMethod("getAPP_VERSION").invoke(cls.getField("INSTANCE").get(null))) as String
-}.getOrNull()
+private val appVersion: String = BuildConfig.APP_VERSION
 
 fun main() = application {
     // remember{} = run ONCE. Code placed directly in application{} re-runs on every recomposition
@@ -62,11 +54,11 @@ fun main() = application {
 
     // Persistent filter states hoisted from DashboardScreen
     var searchQuery by remember { mutableStateOf("") }
-    var selectedProject by remember { mutableStateOf<String?>(null) }
+    var selectedProjects by remember { mutableStateOf<Set<String>>(emptySet()) }
     var dateFromText by remember { mutableStateOf("") }
     var dateToText by remember { mutableStateOf("") }
-    var selectedStatus by remember { mutableStateOf(NcrStatus.ALL) }
-    var selectedDept by remember { mutableStateOf<Int?>(null) }
+    var selectedStatuses by remember { mutableStateOf<Set<NcrStatus>>(emptySet()) }
+    var selectedDepts by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var showArchived by remember { mutableStateOf(false) }
 
@@ -77,11 +69,11 @@ fun main() = application {
 
     val currentFilter = NcrFilter(
         searchQuery = searchQuery,
-        projectNo = selectedProject,
+        projectNos = selectedProjects,
         dateFrom = try { if (dateFromText.isNotBlank()) LocalDate.parse(dateFromText) else null } catch (e: Exception) { null },
         dateTo = try { if (dateToText.isNotBlank()) LocalDate.parse(dateToText) else null } catch (e: Exception) { null },
-        status = selectedStatus,
-        deptId = selectedDept,
+        statuses = selectedStatuses,
+        deptIds = selectedDepts,
         isArchived = showArchived
     )
 
@@ -118,16 +110,16 @@ fun main() = application {
                 is Screen.Dashboard -> DashboardScreen(
                     searchQuery = searchQuery,
                     onSearchQueryChange = { searchQuery = it },
-                    selectedProject = selectedProject,
-                    onSelectedProjectChange = { selectedProject = it },
+                    selectedProjects = selectedProjects,
+                    onSelectedProjectsChange = { selectedProjects = it },
                     dateFromText = dateFromText,
                     onDateFromTextChange = { dateFromText = it },
                     dateToText = dateToText,
                     onDateToTextChange = { dateToText = it },
-                    selectedStatus = selectedStatus,
-                    onSelectedStatusChange = { selectedStatus = it },
-                    selectedDept = selectedDept,
-                    onSelectedDeptChange = { selectedDept = it },
+                    selectedStatuses = selectedStatuses,
+                    onSelectedStatusesChange = { selectedStatuses = it },
+                    selectedDepts = selectedDepts,
+                    onSelectedDeptsChange = { selectedDepts = it },
                     onNewNcrClick = { currentScreen = Screen.NcrDataEntry(null) },
                     onSettingsClick = { currentScreen = Screen.Settings },
                     onEditNcrClick = { id -> currentScreen = Screen.NcrDataEntry(id) },

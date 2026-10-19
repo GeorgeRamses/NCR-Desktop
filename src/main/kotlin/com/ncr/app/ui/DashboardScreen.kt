@@ -32,27 +32,33 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.ncr.app.data.BulkOperationState
-import com.ncr.app.data.NcrFilter
 import com.ncr.app.data.NcrModel
 import com.ncr.app.data.NcrRepository
 import com.ncr.app.data.NcrStatus
 import java.time.LocalDate
+
+private val statusOptions = listOf(
+    NcrStatus.OPEN to "Open NCR",
+    NcrStatus.CLOSED to "Closed NCR",
+    NcrStatus.OVERDUE to "Overdue NCR",
+    NcrStatus.UPCOMING to "Upcoming NCR"
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DashboardScreen(
     searchQuery: String,
     onSearchQueryChange: (String) -> Unit,
-    selectedProject: String?,
-    onSelectedProjectChange: (String?) -> Unit,
+    selectedProjects: Set<String>,
+    onSelectedProjectsChange: (Set<String>) -> Unit,
     dateFromText: String,
     onDateFromTextChange: (String) -> Unit,
     dateToText: String,
     onDateToTextChange: (String) -> Unit,
-    selectedStatus: NcrStatus,
-    onSelectedStatusChange: (NcrStatus) -> Unit,
-    selectedDept: Int?,
-    onSelectedDeptChange: (Int?) -> Unit,
+    selectedStatuses: Set<NcrStatus>,
+    onSelectedStatusesChange: (Set<NcrStatus>) -> Unit,
+    selectedDepts: Set<Int>,
+    onSelectedDeptsChange: (Set<Int>) -> Unit,
     onNewNcrClick: () -> Unit,
     onSettingsClick: () -> Unit,
     onEditNcrClick: (Int) -> Unit,
@@ -80,12 +86,8 @@ fun DashboardScreen(
     onBulkOpenFolder: () -> Unit = {}
 ) {
     var projectList by remember { mutableStateOf(listOf<String>()) }
-    // Dropdown expanded states
-    var projectDropdownExpanded by remember { mutableStateOf(false) }
-    var statusDropdownExpanded by remember { mutableStateOf(false) }
 
     var deptList by remember { mutableStateOf(listOf<Pair<Int, String>>()) }
-    var deptDropdownExpanded by remember { mutableStateOf(false) }
 
     // Selected row tracking for single-click highlight
     var selectedNcrId by remember { mutableStateOf<Int?>(null) }
@@ -140,13 +142,12 @@ fun DashboardScreen(
                 Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text("Filters", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
 
-                    // Row 1: Search + Project + Dept + Status
+                    // Row 1: Search + Project + Dept + Status (all multi-select)
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Search
                         OutlinedTextField(
                             value = searchQuery,
                             onValueChange = onSearchQueryChange,
@@ -156,130 +157,34 @@ fun DashboardScreen(
                             singleLine = true
                         )
 
-                        // Project Dropdown
-                        Box(modifier = Modifier.weight(1f)) {
-                            ExposedDropdownMenuBox(
-                                expanded = projectDropdownExpanded,
-                                onExpandedChange = { projectDropdownExpanded = it }
-                            ) {
-                                OutlinedTextField(
-                                    value = selectedProject ?: "All Projects",
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("Project") },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = projectDropdownExpanded) },
-                                    modifier = Modifier.menuAnchor().fillMaxWidth()
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = projectDropdownExpanded,
-                                    onDismissRequest = { projectDropdownExpanded = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("All Projects") },
-                                        onClick = {
-                                            onSelectedProjectChange(null)
-                                            projectDropdownExpanded = false
-                                        }
-                                    )
-                                    projectList.forEach { project ->
-                                        DropdownMenuItem(
-                                            text = { Text(project) },
-                                            onClick = {
-                                                onSelectedProjectChange(project)
-                                                projectDropdownExpanded = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        MultiSelectDropdown(
+                            label = "Project",
+                            allLabel = "All Projects",
+                            options = projectList.map { it to it },
+                            selected = selectedProjects,
+                            onSelectedChange = onSelectedProjectsChange,
+                            modifier = Modifier.weight(1f),
+                            searchable = true
+                        )
 
-                        // Dept Dropdown
-                        val currentDeptName = deptList.find { it.first == selectedDept }?.second ?: "All Depts"
-                        Box(modifier = Modifier.weight(1.2f)) {
-                            ExposedDropdownMenuBox(
-                                expanded = deptDropdownExpanded,
-                                onExpandedChange = { deptDropdownExpanded = it }
-                            ) {
-                                OutlinedTextField(
-                                    value = currentDeptName,
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("Department") },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = deptDropdownExpanded) },
-                                    modifier = Modifier.menuAnchor().fillMaxWidth()
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = deptDropdownExpanded,
-                                    onDismissRequest = { deptDropdownExpanded = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("All Depts") },
-                                        onClick = {
-                                            onSelectedDeptChange(null)
-                                            deptDropdownExpanded = false
-                                        }
-                                    )
-                                    deptList.forEach { dept ->
-                                        DropdownMenuItem(
-                                            text = { Text(dept.second) },
-                                            onClick = {
-                                                onSelectedDeptChange(dept.first)
-                                                deptDropdownExpanded = false
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
+                        MultiSelectDropdown(
+                            label = "Department",
+                            allLabel = "All Depts",
+                            options = deptList.map { it.first to it.second },
+                            selected = selectedDepts,
+                            onSelectedChange = onSelectedDeptsChange,
+                            modifier = Modifier.weight(1.2f),
+                            searchable = true
+                        )
 
-                        // Status Dropdown
-                        Box(modifier = Modifier.weight(1f)) {
-                            ExposedDropdownMenuBox(
-                                expanded = statusDropdownExpanded,
-                                onExpandedChange = { statusDropdownExpanded = it }
-                            ) {
-                                OutlinedTextField(
-                                    value = when (selectedStatus) {
-                                        NcrStatus.ALL -> "All"
-                                        NcrStatus.OPEN -> "Open NCR"
-                                        NcrStatus.CLOSED -> "Closed NCR"
-                                        NcrStatus.OVERDUE -> "Overdue NCR"
-                                        NcrStatus.UPCOMING -> "Upcoming NCR"
-                                    },
-                                    onValueChange = {},
-                                    readOnly = true,
-                                    label = { Text("Status") },
-                                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = statusDropdownExpanded) },
-                                    modifier = Modifier.menuAnchor().fillMaxWidth()
-                                )
-                                ExposedDropdownMenu(
-                                    expanded = statusDropdownExpanded,
-                                    onDismissRequest = { statusDropdownExpanded = false }
-                                ) {
-                                    DropdownMenuItem(
-                                        text = { Text("All") },
-                                        onClick = { onSelectedStatusChange(NcrStatus.ALL); statusDropdownExpanded = false }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Open NCR") },
-                                        onClick = { onSelectedStatusChange(NcrStatus.OPEN); statusDropdownExpanded = false }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Closed NCR") },
-                                        onClick = { onSelectedStatusChange(NcrStatus.CLOSED); statusDropdownExpanded = false }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Overdue NCR") },
-                                        onClick = { onSelectedStatusChange(NcrStatus.OVERDUE); statusDropdownExpanded = false }
-                                    )
-                                    DropdownMenuItem(
-                                        text = { Text("Upcoming NCR") },
-                                        onClick = { onSelectedStatusChange(NcrStatus.UPCOMING); statusDropdownExpanded = false }
-                                    )
-                                }
-                            }
-                        }
+                        MultiSelectDropdown(
+                            label = "Status",
+                            allLabel = "All",
+                            options = statusOptions,
+                            selected = selectedStatuses,
+                            onSelectedChange = onSelectedStatusesChange,
+                            modifier = Modifier.weight(1f)
+                        )
                     }
 
                     // Row 2: Date range + Clear + Export buttons
@@ -305,11 +210,11 @@ fun DashboardScreen(
                         OutlinedButton(
                             onClick = {
                                 onSearchQueryChange("")
-                                onSelectedProjectChange(null)
-                                onSelectedDeptChange(null)
+                                onSelectedProjectsChange(emptySet())
+                                onSelectedDeptsChange(emptySet())
                                 onDateFromTextChange("")
                                 onDateToTextChange("")
-                                onSelectedStatusChange(NcrStatus.ALL)
+                                onSelectedStatusesChange(emptySet())
                             },
                             modifier = Modifier.height(56.dp)
                         ) {
@@ -318,6 +223,21 @@ fun DashboardScreen(
                             Text("Clear")
                         }
                     }
+
+                    // Active filter chips (click a chip to remove that value)
+                    val chips = buildList {
+                        selectedProjects.sorted().forEach { p ->
+                            add(FilterChipItem("Project: $p") { onSelectedProjectsChange(selectedProjects - p) })
+                        }
+                        selectedDepts.forEach { d ->
+                            add(FilterChipItem("Dept: ${deptMap[d] ?: d}") { onSelectedDeptsChange(selectedDepts - d) })
+                        }
+                        selectedStatuses.forEach { st ->
+                            val name = statusOptions.firstOrNull { it.first == st }?.second ?: st.name
+                            add(FilterChipItem("Status: $name") { onSelectedStatusesChange(selectedStatuses - st) })
+                        }
+                    }
+                    SelectedFilterChips(chips)
 
                     // Row 3: Export buttons
                     Row(

@@ -5,7 +5,8 @@ plugins {
 }
 
 group = "com.ncr.app"
-version = "1.0-SNAPSHOT"
+val appVersion: String by lazy { "1.0.0" }
+version = appVersion
 
 
 repositories {
@@ -40,13 +41,45 @@ dependencies {
     implementation("com.sun.mail:jakarta.mail:2.0.1")
 }
 
+/* ── Generate BuildConfig with app version ── */
+val generatedSrcDir = layout.buildDirectory.dir("generated/source/buildconfig")
+
+tasks.register("generateBuildConfig") {
+    val outputDir = generatedSrcDir.get().asFile.resolve("com/ncr/app")
+    outputs.dir(outputDir)
+    doLast {
+        outputDir.mkdirs()
+        File(outputDir, "BuildConfig.kt").writeText(
+            """package com.ncr.app
+
+object BuildConfig {
+    const val APP_VERSION = "$appVersion"
+}
+""".trimIndent() + "\n"
+        )
+    }
+}
+
+// Make Kotlin compilation depend on generated BuildConfig
+tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach {
+    dependsOn("generateBuildConfig")
+}
+
+kotlin {
+    sourceSets {
+        main {
+            kotlin.srcDir(generatedSrcDir)
+        }
+    }
+}
+
 compose.desktop {
     application {
         mainClass = "com.ncr.app.MainKt"
         nativeDistributions {
             targetFormats(org.jetbrains.compose.desktop.application.dsl.TargetFormat.Dmg, org.jetbrains.compose.desktop.application.dsl.TargetFormat.Msi, org.jetbrains.compose.desktop.application.dsl.TargetFormat.Exe, org.jetbrains.compose.desktop.application.dsl.TargetFormat.Deb)
             packageName = "NCR_App"
-            packageVersion = "1.0.0"
+            packageVersion = appVersion.toString()
             windows {
                 iconFile.set(project.file("src/main/resources/icon.ico"))
             }
